@@ -140,7 +140,7 @@ async function showHome() {
   const projects = (await idb.all('projects')).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const hasDemo = projects.some(p => p.id === 'demo');
   $('#app').innerHTML = `
-    <header class="bar"><div class="title"><b>Site Visit</b><small>Holmes Miller</small></div></header>
+    <header class="bar brand"><img class="logo" src="brand/hm-logo.png" alt=""><img class="wordmark" src="brand/hm-wordmark.png" alt="Holmes Miller"><span class="app">Site Visit</span></header>
     <div class="scroll">
       ${projects.length ? '<h2>Projects on this phone</h2>' : '<p class="muted">No projects on this phone yet. Add one that has been published from Revit, or try the demo.</p>'}
       ${projects.map(p => `
@@ -411,9 +411,8 @@ function openObs(id) {
 
 function renderSheet() {
   const o = selected(), sheet = $('#sheet');
-  if (!o) { sheet.hidden = true; return; }
+  if (!o) return hideSheet();
   const plan = S.plans.find(p => p.id === o.planId);
-  const photos = S.photos.get(o.id) || [];
   const keepNote = sheet.dataset.obs === o.id && $('textarea', sheet) ? $('textarea', sheet).value : o.note;
   sheet.dataset.obs = o.id;
   sheet.innerHTML = `
@@ -426,21 +425,38 @@ function renderSheet() {
       </select>
       <button data-act="done">Done</button>
     </div>
-    <div class="photos">
-      ${photos.length || S.busy ? '' : `<button class="camera wide" data-act="camera">${CAMERA_SVG}<span>Take photo</span></button>`}
-      ${photos.map(p => `<img src="${urlFor('thumb:' + p.id, p.thumb)}" data-photo="${esc(p.id)}" alt="">`).join('')}
-      ${S.busy ? '<div class="busy">Saving&hellip;</div>' : ''}
-      ${photos.length || S.busy ? `<button class="camera" data-act="camera">${CAMERA_SVG}<span>Another</span></button>` : ''}
-      ${photos.length || S.busy ? '<button data-act="library"><span>From</span><span>library</span></button>' : ''}
-    </div>
-    <textarea id="note" placeholder="What did you see? Tap the microphone on the keyboard to dictate.">${esc(keepNote)}</textarea>
+    <div class="photos">${photosHtml(o)}</div>
+    <textarea id="note" rows="3" placeholder="What did you see? Tap the microphone on the keyboard to dictate.">${esc(keepNote)}</textarea>
     <div class="chips">
       ${CATEGORIES.map(c => `<button data-cat="${esc(c)}" class="${o.category === c ? 'on' : ''}">${esc(c)}</button>`).join('')}
       <span class="spacer"></span>
-      ${photos.length ? '' : '<button data-act="library">Library</button>'}
       <button class="danger" data-act="delete-obs">Delete</button>
     </div>`;
   sheet.hidden = false;
+  document.body.classList.add('sheet-open');
+}
+
+function photosHtml(o) {
+  const photos = S.photos.get(o.id) || [], some = photos.length || S.busy;
+  return `
+      ${some ? '' : `<button class="camera wide" data-act="camera">${CAMERA_SVG}<span>Take photo</span></button>`}
+      ${photos.map(p => `<img src="${urlFor('thumb:' + p.id, p.thumb)}" data-photo="${esc(p.id)}" alt="">`).join('')}
+      ${S.busy ? '<div class="busy">Saving&hellip;</div>' : ''}
+      ${some ? `<button class="camera" data-act="camera">${CAMERA_SVG}<span>Another</span></button>` : ''}
+      <button data-act="library"><span>From</span><span>library</span></button>`;
+}
+
+// Refresh only the photo strip, so a note being typed keeps its cursor and keyboard.
+function renderSheetPhotos() {
+  const o = selected(), strip = $('#sheet .photos');
+  if (!o || !strip || $('#sheet').dataset.obs !== o.id) return renderSheet();
+  strip.innerHTML = photosHtml(o);
+}
+
+function hideSheet() {
+  const sheet = $('#sheet');
+  sheet.hidden = true; sheet.innerHTML = ''; delete sheet.dataset.obs;
+  document.body.classList.remove('sheet-open');
 }
 
 let noteTimer;
@@ -464,13 +480,14 @@ async function deleteObs(id) {
 // Closing the sheet throws away a pin that has neither a photo nor a note (an accidental tap).
 function closeSheet(silent) {
   clearTimeout(noteTimer);
-  const o = selected(), sheet = $('#sheet');
+  const o = selected();
   if (o) {
     saveNote();
     S.sel = null;
     if (!S.busy && !(S.photos.get(o.id) || []).length && !o.note.trim()) deleteObs(o.id).then(() => { if (S.visit && !silent) { renderPins(); renderLevels(); } });
   }
-  sheet.hidden = true; sheet.innerHTML = ''; delete sheet.dataset.obs;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  hideSheet();
   if (S.visit && S.plan && !silent) { renderPins(); renderLevels(); }
 }
 
@@ -493,7 +510,7 @@ function scaled(img, max, quality) {
 async function addPhotos(obsId, files) {
   const o = S.obs.find(q => q.id === obsId);
   if (!o || !files.length) return;
-  S.busy += files.length; if (S.sel === obsId) renderSheet();
+  S.busy += files.length; if (S.sel === obsId) renderSheetPhotos();
   for (const f of files) {
     try {
       const img = await loadImage(f);
@@ -510,7 +527,7 @@ async function addPhotos(obsId, files) {
     S.busy--;
   }
   if (S.visit && S.visit.id === o.visitId) {
-    if (S.sel === obsId) renderSheet();
+    if (S.sel === obsId) renderSheetPhotos();
     renderPins(); renderRooms(); renderStats();
   }
 }
@@ -664,7 +681,10 @@ async function sendExport() {
 }
 
 // ------------------------------------------------------------ events
+const isTextField = el => el && el.matches && el.matches('textarea, input[type=text]');
 document.addEventListener('click', async e => {
+  // Belt and braces for iPhones: a tap on a text box always gives it the keyboard.
+  if (isTextField(e.target)) { if (document.activeElement !== e.target) e.target.focus(); return; }
   const t = e.target.closest('[data-act],[data-project],[data-plan],[data-obs],[data-cat],[data-photo],[data-goto]');
   if (!t) return;
   const d = t.dataset;
@@ -673,7 +693,12 @@ document.addEventListener('click', async e => {
     if (d.plan) { closeSheet(); return setPlan(d.plan); }
     if (d.obs) return openObs(d.obs);
     if (d.goto) { renderVisit(S.obs.find(o => o.id === d.goto).planId); return openObs(d.goto); }
-    if (d.cat) { const o = selected(); if (o) { o.category = o.category === d.cat ? '' : d.cat; saveNote(); idb.put('observations', o); renderSheet(); } return; }
+    if (d.cat) {
+      const o = selected(); if (!o) return;
+      o.category = o.category === d.cat ? '' : d.cat; saveNote(); idb.put('observations', o);
+      for (const b of document.querySelectorAll('#sheet [data-cat]')) b.classList.toggle('on', b.dataset.cat === o.category);
+      return;
+    }
     if (d.photo && !d.act) return showPhoto(d.photo);
     switch (d.act) {
       case 'home': return showHome();
@@ -692,14 +717,14 @@ document.addEventListener('click', async e => {
         const o = selected(); if (!o) return;
         const n = (S.photos.get(o.id) || []).length;
         if (n && !confirm(`Delete location ${o.seq} and its ${n} photo${n === 1 ? '' : 's'}?`)) return;
-        S.sel = null; $('#sheet').hidden = true; delete $('#sheet').dataset.obs;
+        S.sel = null; hideSheet();
         await deleteObs(o.id); renderPins(); renderLevels(); renderRooms(); renderStats(); return;
       }
       case 'delete-photo': {
         const o = selected(); if (!o || !confirm('Delete this photo?')) return;
         const list = S.photos.get(o.id) || [], i = list.findIndex(p => p.id === d.photo);
         if (i >= 0) { await idb.del('photos', d.photo); dropUrl('thumb:' + d.photo); dropUrl('full:' + d.photo); list.splice(i, 1); }
-        closeOverlay(); renderSheet(); renderPins(); renderRooms(); renderStats(); return;
+        closeOverlay(); renderSheetPhotos(); renderPins(); renderRooms(); renderStats(); return;
       }
       case 'close-overlay': return closeOverlay();
       case 'finish': return showFinish();
@@ -724,6 +749,10 @@ document.addEventListener('click', async e => {
 
 document.addEventListener('input', e => {
   if (e.target.id === 'note') { clearTimeout(noteTimer); noteTimer = setTimeout(saveNote, 400); }
+});
+// When the keyboard closes, iPhones can leave the page shifted up; put it back.
+document.addEventListener('focusout', e => {
+  if (isTextField(e.target)) setTimeout(() => { if (!isTextField(document.activeElement)) window.scrollTo(0, 0); }, 80);
 });
 document.addEventListener('change', e => {
   if (e.target.id !== 'room') return;
