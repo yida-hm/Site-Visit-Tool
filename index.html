@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#1f2a33">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Site Visit">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<title>Site Visit</title>
+</head>
+<body>
+<div id="app"></div>
+<div id="sheet" class="sheet" hidden></div>
+<div id="overlay" class="overlay" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<!-- File inputs are kept in the page (not display:none) so phones allow them to be opened from a tap -->
+<input id="cam" class="ghost" type="file" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+<input id="lib" class="ghost" type="file" accept="image/*" multiple tabindex="-1" aria-hidden="true">
+<input id="pack" class="ghost" type="file" accept=".json,application/json" tabindex="-1" aria-hidden="true">
+
+<script src="app.js"></script>
+</body>
+</html>
