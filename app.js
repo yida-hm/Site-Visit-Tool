@@ -17,7 +17,13 @@ const fmtDate = d => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', m
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const CATEGORIES = ['Progress', 'Defect', 'Query', 'H&S'];
 const PHOTO_MAX = 2560;   // longest edge of a saved photo, in pixels
-const CAMERA_SVG = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+const svgIcon = d => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICON = {
+  plus: svgIcon('<path d="M12 5v14M5 12h14"/>'),
+  cloud: svgIcon('<path d="M7 18a4 4 0 0 1-.5-7.97A5.5 5.5 0 0 1 17.2 9.1 4.5 4.5 0 0 1 17 18z"/><path d="M12 16v-5M9.8 13l2.2-2.2 2.2 2.2"/>'),
+  building: svgIcon('<path d="M4 20V6l8-3v17M12 9l8 2v9M3 20h18M7.5 8.5v0M7.5 12v0M7.5 15.5v0M16 14v0M16 17v0"/>'),
+};
+const CAMERA_SVG ='<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
 
 let toastTimer;
 function toast(msg, ms = 2600) {
@@ -140,18 +146,19 @@ async function showHome() {
   const projects = (await idb.all('projects')).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const hasDemo = projects.some(p => p.id === 'demo');
   $('#app').innerHTML = `
-    <header class="bar brand"><img class="logo" src="brand/hm-logo.png" alt=""><img class="wordmark" src="brand/hm-wordmark.png" alt="Holmes Miller"><span class="app">Site Visit</span></header>
+    <header class="bar brand"><img class="logo" src="brand/hm-logo.png" alt=""><img class="wordmark" src="brand/hm-wordmark.png" alt="Holmes Miller"></header>
     <div class="scroll">
-      ${projects.length ? '<h2>Projects on this phone</h2>' : '<p class="muted">No projects on this phone yet. Add one that has been published from Revit, or try the demo.</p>'}
+      <div class="hero"><small>Site Visit</small><h1>Projects</h1></div>
+      ${projects.length ? '' : '<p class="muted empty">No projects on this phone yet. Add one that has been sent from Revit, or try the demo.</p>'}
       ${projects.map(p => `
         <button class="card" data-project="${esc(p.id)}">
-          <div class="grow"><b>${esc(p.name)}</b><small>${esc(p.number || '')} &middot; ${p.plans.length} plan${p.plans.length === 1 ? '' : 's'}</small></div>
+          <span class="tile">${ICON.building}</span>
+          <div class="grow"><b>${esc(p.name)}</b><small>${esc(p.number || '')} &middot; ${p.plans.length} level${p.plans.length === 1 ? '' : 's'}</small></div>
           <span class="chev">&rsaquo;</span>
         </button>`).join('')}
-      <h2>Add</h2>
-      <button class="primary big" data-act="add">Add project from OneDrive</button>
-      ${hasDemo ? '' : '<button class="plain" data-act="demo">Try the demo project</button>'}
-      <p class="muted">Projects are published from Revit as a single file in the project's <i>Site Visits</i> folder. Pick that file here.</p>
+      <button class="primary big" data-act="add">${ICON.cloud}<span>Add project from OneDrive</span></button>
+      ${hasDemo ? '' : `<button class="link" data-act="demo">Try the demo project</button>`}
+      <p class="muted">Projects are sent from Revit as a single file in the project's <i>Site Visits</i> folder. Pick that file here.</p>
     </div>`;
 }
 
@@ -167,21 +174,24 @@ async function showProject(pid) {
   for (const v of visits) counts.set(v.id, (await idb.by('observations', 'visit', v.id)).length);
   const todays = visits.find(v => v.date === todayISO());
   $('#app').innerHTML = `
-    <header class="bar"><button class="back" data-act="home">&lsaquo;</button>
-      <div class="title"><b>${esc(project.name)}</b><small>${esc(project.number || '')}</small></div></header>
+    <header class="bar light"><button class="back text" data-act="home">&lsaquo;<span>Projects</span></button></header>
     <div class="scroll">
+      <div class="hero"><small>${esc(project.number || '')}</small><h1>${esc(project.name)}</h1></div>
       <button class="primary big" data-act="${todays ? 'continue' : 'start'}" data-visit="${todays ? esc(todays.id) : ''}">
-        ${todays ? "Continue today's visit" : "Start today's visit"}</button>
+        ${CAMERA_SVG}<span>${todays ? "Continue today's visit" : "Start today's visit"}</span></button>
+      ${todays ? `<button class="link" data-act="start">${ICON.plus}<span>Start a new visit</span></button>` : ''}
       ${visits.length ? '<h2>Visits</h2>' : ''}
       ${visits.map(v => `
         <button class="card" data-visit="${esc(v.id)}" data-act="continue">
-          <div class="grow"><b>${fmtDate(v.date)}${v.exportedAt ? '<span class="tag">sent</span>' : ''}</b>
+          <div class="grow"><b>${fmtDate(v.date)}, ${new Date(v.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${v.exportedAt ? '<span class="tag">sent</span>' : ''}</b>
           <small>${counts.get(v.id)} location${counts.get(v.id) === 1 ? '' : 's'} recorded</small></div>
           <span class="chev">&rsaquo;</span>
         </button>`).join('')}
       <h2>Project</h2>
-      <button class="plain" data-act="add">Update plans from OneDrive</button>
-      <button class="plain" data-act="remove-project">Remove project from this phone</button>
+      <div class="group">
+        <button class="plain" data-act="add">Update plans from OneDrive<span class="chev">&rsaquo;</span></button>
+        <button class="plain danger" data-act="remove-project">Remove project from this phone</button>
+      </div>
     </div>`;
 }
 
@@ -260,7 +270,7 @@ function renderPins() {
 }
 
 function positionPins() {
-  if (!S.view || !S.plan) return;
+  if (!S.view || !S.plan || !$('#pins')) return;
   for (const el of $('#pins').children) {
     const o = S.obs.find(x => x.id === el.dataset.obs);
     if (!o) continue;
