@@ -129,6 +129,20 @@ body.sheet-open .bar.bottom { display: none; }
 .group .plain:last-child { border-bottom: 0; }
 .plain.danger { color: var(--danger); }
 .muted { color: var(--mute); font-size: 13px; margin: 10px 4px; }
+.muted.tip { background: var(--tint); border-radius: 14px; padding: 12px 14px; margin: 14px 0 0; color: var(--navy); }
+/* visits still waiting to be sent */
+.warn { color: #B4502F; }
+.tag.warn { background: #FCEBE6; color: #B4502F; }
+.notice { background: #FFF6F3; border: 1px solid #F3C6BA; border-radius: 14px; padding: 12px 14px 4px; margin-bottom: 14px; }
+.notice > b { display: block; color: #B4502F; font-size: 15px; font-weight: 600; }
+.notice > small { display: block; color: var(--ink, #3c3c3c); font-size: 13px; margin: 2px 0 6px; }
+.notice .plain { background: transparent; padding: 8px 0; border-bottom: 0; border-top: 1px solid #F3C6BA; gap: 10px; }
+.notice .plain .grow { flex: 1; min-width: 0; }
+.notice .plain b { display: block; font-size: 15px; font-weight: 600; }
+.notice .plain small { color: var(--mute); font-size: 13px; }
+.dialog .extra { border-top: 1px solid var(--hair); margin-top: 14px; padding-top: 6px; }
+.dialog .extra .link { margin-bottom: 0; }
+.dialog .extra .muted { margin: 0 0 2px; text-align: center; }
 .muted.empty { background: var(--card); border: 1px dashed var(--line); border-radius: 14px; padding: 16px 14px; margin: 0 0 8px; }
 h2 { font-size: 13px; font-weight: 500; color: var(--mute); margin: 20px 4px 8px; }
 .tag { display: inline-block; font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 10px; background: var(--tint); color: var(--blue); margin-left: 8px; vertical-align: 1px; }

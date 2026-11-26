@@ -139,26 +139,57 @@ async function demoPack() {
   return { format: 'hm-sitepack', version: 1, project: { id: 'demo', number: '0000', name: 'Demo Building' }, plans };
 }
 
+// ------------------------------------------------------------ what still has to be sent
+// A visit needs sending when it holds something and has not been sent since it last changed.
+const needsSending = (v, count) => count > 0 && (!v.exportedAt || (!!v.changedAt && v.changedAt > v.exportedAt));
+function touch() {
+  if (!S.visit) return;
+  S.visit.changedAt = new Date().toISOString(); idb.put('visits', S.visit);
+}
+const visitWhen = v => `${fmtDate(v.date)}, ${new Date(v.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+// Phones keep a Home Screen app's data, but can clear a web page's data after a few weeks unused.
+const onHomeScreen = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
 // ------------------------------------------------------------ screens: home
 async function showHome() {
   S.project = S.visit = S.plan = null; closeSheet(true);
   localStorage.removeItem('sv.last');
   const projects = (await idb.all('projects')).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const hasDemo = projects.some(p => p.id === 'demo');
+  const waiting = [];
+  for (const v of await idb.all('visits')) {
+    const count = (await idb.by('observations', 'visit', v.id)).length;
+    const project = projects.find(p => p.id === v.projectId);
+    if (project && project.id !== 'demo' && needsSending(v, count)) waiting.push({ v, count, project });
+  }
+  waiting.sort((a, b) => a.v.startedAt.localeCompare(b.v.startedAt));
+  const waitingFor = pid => waiting.filter(w => w.project.id === pid).length;
   $('#app').innerHTML = `
     <header class="bar brand"><img class="logo" src="brand/hm-logo.png" alt=""><img class="wordmark" src="brand/hm-wordmark.png" alt="Holmes Miller"></header>
     <div class="scroll">
       <div class="hero"><small>Site Visit</small><h1>Projects</h1></div>
+      ${waiting.length ? `
+        <div class="notice">
+          <b>${waiting.length === 1 ? '1 visit has' : waiting.length + ' visits have'} not been sent yet</b>
+          <small>${waiting.length === 1 ? 'It is' : 'They are'} only on this phone. Open ${waiting.length === 1 ? 'it' : 'each one'} and tap Finish &amp; send.</small>
+          ${waiting.map(w => `
+            <button class="plain" data-act="continue" data-visit="${esc(w.v.id)}">
+              <span class="grow"><b>${esc(w.project.name)}</b><small>${visitWhen(w.v)} &middot; ${plural(w.count, 'location')}${w.v.exportedAt ? ' &middot; changed since it was sent' : ''}</small></span>
+              <span class="chev">&rsaquo;</span>
+            </button>`).join('')}
+        </div>` : ''}
       ${projects.length ? '' : '<p class="muted empty">No projects on this phone yet. Add one that has been sent from Revit, or try the demo.</p>'}
       ${projects.map(p => `
         <button class="card" data-project="${esc(p.id)}">
           <span class="tile">${ICON.building}</span>
-          <div class="grow"><b>${esc(p.name)}</b><small>${esc(p.number || '')} &middot; ${p.plans.length} level${p.plans.length === 1 ? '' : 's'}</small></div>
+          <div class="grow"><b>${esc(p.name)}</b><small>${esc(p.number || '')} &middot; ${plural(p.plans.length, 'level')}${waitingFor(p.id) ? ` &middot; <span class="warn">${waitingFor(p.id)} not sent</span>` : ''}</small></div>
           <span class="chev">&rsaquo;</span>
         </button>`).join('')}
       <button class="primary big" data-act="add">${ICON.cloud}<span>Add project from OneDrive</span></button>
       ${hasDemo ? '' : `<button class="link" data-act="demo">Try the demo project</button>`}
       <p class="muted">Projects are sent from Revit as a single file in the project's <i>Site Visits</i> folder. Pick that file here.</p>
+      ${navigator.maxTouchPoints > 0 && !onHomeScreen() ? `<p class="muted tip"><b>Add this app to your Home Screen.</b> In Safari tap Share, then Add to Home Screen, and open it from there. Phones can clear a web page's saved data after a few weeks, which would lose visits that were not sent.</p>` : ''}
     </div>`;
 }
 
@@ -183,7 +214,7 @@ async function showProject(pid) {
       ${visits.length ? '<h2>Visits</h2>' : ''}
       ${visits.map(v => `
         <button class="card" data-visit="${esc(v.id)}" data-act="continue">
-          <div class="grow"><b>${fmtDate(v.date)}, ${new Date(v.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${v.exportedAt ? '<span class="tag">sent</span>' : ''}</b>
+          <div class="grow"><b>${visitWhen(v)}${needsSending(v, counts.get(v.id)) ? `<span class="tag warn">${v.exportedAt ? 'changed since sent' : 'not sent'}</span>` : v.exportedAt ? '<span class="tag">sent</span>' : ''}</b>
           <small>${counts.get(v.id)} location${counts.get(v.id) === 1 ? '' : 's'} recorded</small></div>
           <span class="chev">&rsaquo;</span>
         </button>`).join('')}
@@ -473,6 +504,7 @@ let noteTimer;
 function saveNote() {
   const o = selected(), ta = $('#note');
   if (!o || !ta) return;
+  if (o.note !== ta.value) touch();
   o.note = ta.value; idb.put('observations', o);
 }
 
@@ -482,7 +514,7 @@ async function deleteObs(id) {
   for (const p of S.photos.get(id) || []) { await idb.del('photos', p.id); dropUrl('thumb:' + p.id); dropUrl('full:' + p.id); }
   S.photos.delete(id);
   await idb.del('observations', id);
-  S.obs.splice(i, 1);
+  S.obs.splice(i, 1); touch();
   // keep numbering continuous
   for (let k = 0; k < S.obs.length; k++) if (S.obs[k].seq !== k + 1) { S.obs[k].seq = k + 1; await idb.put('observations', S.obs[k]); }
 }
@@ -533,6 +565,7 @@ async function addPhotos(obsId, files) {
       await idb.put('photos', p);
       if (!S.photos.has(obsId)) S.photos.set(obsId, []);
       S.photos.get(obsId).push(p);
+      if (S.visit && S.visit.id === o.visitId) touch();
     } catch (err) { toast(err.message || 'Photo could not be saved'); }
     S.busy--;
   }
@@ -657,7 +690,28 @@ function showFinish() {
     <p class="muted" id="finish-msg">The visit is packed into one file. Save it to the project's <i>Site Visits</i> folder in OneDrive.</p>
     <div class="row"><button data-act="close-overlay">Not yet</button>
       <button class="primary" data-act="prepare" ${nObs ? '' : 'disabled'}>Prepare file</button></div>
+    ${nPhotos ? `<div class="extra">
+      <button class="link" data-act="save-photos">Keep a copy of the photos on this phone</button>
+      <p class="muted" id="photos-msg">${S.visit.photosSavedAt ? 'A copy was saved to this phone on ' + fmtDate(S.visit.photosSavedAt.slice(0, 10)) + '.' : 'A spare copy in case the visit file goes astray. Choose <i>Save Images</i> in the list that opens.'}</p>
+    </div>` : ''}
   </div>`;
+}
+
+// A spare copy of the visit's photos in the phone's own Photos. A web app cannot write to Photos by
+// itself, so this hands them to the phone's share sheet, where "Save Images" does it.
+async function savePhotos() {
+  const ref = (S.project.number || S.project.name).replace(/[\\/:*?"<>|]/g, '-');
+  const files = [];
+  for (const o of S.obs) (S.photos.get(o.id) || []).forEach((p, i) =>
+    files.push(new File([p.blob], `${ref} ${S.visit.date} ${pad(o.seq, 3)}-${i + 1}.jpg`, { type: 'image/jpeg' })));
+  if (!files.length) return;
+  if (!(navigator.canShare && navigator.canShare({ files }))) {
+    return toast('This browser cannot pass photos to the phone. They are still inside the visit file.', 5000);
+  }
+  try { await navigator.share({ files }); }
+  catch (err) { if (err && err.name === 'AbortError') return; throw err; }
+  S.visit.photosSavedAt = new Date().toISOString(); await idb.put('visits', S.visit);
+  const msg = $('#photos-msg'); if (msg) msg.textContent = `${plural(files.length, 'photo')} handed to the phone.`;
 }
 
 async function prepareExport(btn) {
@@ -705,7 +759,7 @@ document.addEventListener('click', async e => {
     if (d.goto) { renderVisit(S.obs.find(o => o.id === d.goto).planId); return openObs(d.goto); }
     if (d.cat) {
       const o = selected(); if (!o) return;
-      o.category = o.category === d.cat ? '' : d.cat; saveNote(); idb.put('observations', o);
+      o.category = o.category === d.cat ? '' : d.cat; saveNote(); idb.put('observations', o); touch();
       for (const b of document.querySelectorAll('#sheet [data-cat]')) b.classList.toggle('on', b.dataset.cat === o.category);
       return;
     }
@@ -733,13 +787,14 @@ document.addEventListener('click', async e => {
       case 'delete-photo': {
         const o = selected(); if (!o || !confirm('Delete this photo?')) return;
         const list = S.photos.get(o.id) || [], i = list.findIndex(p => p.id === d.photo);
-        if (i >= 0) { await idb.del('photos', d.photo); dropUrl('thumb:' + d.photo); dropUrl('full:' + d.photo); list.splice(i, 1); }
+        if (i >= 0) { await idb.del('photos', d.photo); dropUrl('thumb:' + d.photo); dropUrl('full:' + d.photo); list.splice(i, 1); touch(); }
         closeOverlay(); renderSheetPhotos(); renderPins(); renderRooms(); renderStats(); return;
       }
       case 'close-overlay': return closeOverlay();
       case 'finish': return showFinish();
       case 'prepare': return prepareExport(t);
       case 'send': return sendExport();
+      case 'save-photos': return savePhotos();
       case 'remove-project': {
         const visits = await idb.by('visits', 'project', S.project.id);
         const unsent = visits.filter(v => !v.exportedAt).length;
@@ -769,7 +824,7 @@ document.addEventListener('change', e => {
   const o = selected(); if (!o) return;
   const plan = S.plans.find(p => p.id === o.planId), r = plan && plan.rooms.find(q => q.id === e.target.value);
   o.roomId = r ? r.id : null; o.roomNumber = r ? r.number : ''; o.roomName = r ? r.name : '';
-  idb.put('observations', o); renderRooms(); renderStats();
+  idb.put('observations', o); touch(); renderRooms(); renderStats();
 });
 
 for (const id of ['cam', 'lib']) $('#' + id).addEventListener('change', e => {
