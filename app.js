@@ -261,6 +261,7 @@ function renderVisit(planId) {
       <div class="pins" id="pins"></div>
       <div class="hint" id="hint">Tap the plan where you are standing</div>
       <button class="fitbtn" data-act="fit" title="Fit plan">&#x2922;</button>
+      <button class="genbtn" data-act="general" title="A note or photo that does not belong to a place on the plan">${ICON.plus}<span id="gen-label">General note</span></button>
     </main>
     <footer class="bar bottom"><div class="stats" id="stats"></div>
       <button class="primary" data-act="finish">Finish &amp; send</button></footer>`;
@@ -294,10 +295,28 @@ function renderRooms() {
 }
 
 function renderPins() {
-  $('#pins').innerHTML = S.obs.filter(o => o.planId === S.plan.id).map(o =>
+  if (!$('#pins')) return;
+  $('#pins').innerHTML = S.obs.filter(o => S.plan && o.planId === S.plan.id).map(o =>
     `<button class="pin${o.id === S.sel ? ' sel' : ''}${(S.photos.get(o.id) || []).length ? '' : ' empty'}" data-obs="${esc(o.id)}"><span>${o.seq}</span></button>`).join('');
   positionPins();
   $('#hint').hidden = S.obs.length > 0;
+  const general = S.obs.filter(o => !o.planId).length;
+  $('#gen-label').textContent = general ? `General note (${general})` : 'General note';
+}
+
+// A note or photo that is about the whole site, not a place on a plan. It has no pin; it shows in the List.
+function addGeneral() {
+  closeSheet();
+  const o = {
+    id: uid(), visitId: S.visit.id, projectId: S.project.id,
+    seq: S.obs.reduce((m, q) => Math.max(m, q.seq), 0) + 1,
+    planId: null, planName: 'General', x: null, y: null,
+    roomId: null, roomNumber: '', roomName: '',
+    note: '', category: '', createdAt: new Date().toISOString(),
+  };
+  S.obs.push(o); S.sel = o.id;
+  idb.put('observations', o);
+  renderPins(); renderSheet();
 }
 
 function positionPins() {
@@ -446,7 +465,7 @@ function openObs(id) {
   if (S.sel && S.sel !== id) closeSheet();
   const o = S.obs.find(q => q.id === id);
   if (!o) return;
-  if (!S.plan || S.plan.id !== o.planId) setPlan(o.planId);
+  if (o.planId && (!S.plan || S.plan.id !== o.planId)) setPlan(o.planId);
   S.sel = id; renderPins(); renderSheet(); revealPin(o);
 }
 
@@ -459,7 +478,8 @@ function renderSheet() {
   sheet.innerHTML = `
     <div class="sheet-head">
       <span class="num">${o.seq}</span>
-      <select id="room">
+      ${o.planId ? '' : '<span class="where">General note <small>not on a plan</small></span>'}
+      <select id="room"${o.planId ? '' : ' hidden'}>
         <option value="">${plan && plan.rooms.length ? 'No room (external / other)' : esc(o.planName)}</option>
         ${(plan ? plan.rooms : []).slice().sort((a, b) => String(a.number).localeCompare(String(b.number), undefined, { numeric: true }))
           .map(r => `<option value="${esc(r.id)}"${r.id === o.roomId ? ' selected' : ''}>${esc(r.number)} ${esc(r.name)}</option>`).join('')}
@@ -581,9 +601,65 @@ function showPhoto(photoId) {
   const ov = $('#overlay');
   ov.className = 'overlay photo'; ov.hidden = false;
   ov.innerHTML = `<img src="${urlFor('full:' + p.id, p.blob)}" alt="">
-    <div class="tools"><button data-act="delete-photo" data-photo="${esc(p.id)}">Delete photo</button><button data-act="close-overlay">Close</button></div>`;
+    <div class="tools"><button data-act="delete-photo" data-photo="${esc(p.id)}">Delete</button><button data-act="draw" data-photo="${esc(p.id)}">${p.original ? 'Edit drawing' : 'Draw on photo'}</button><button data-act="close-overlay">Close</button></div>`;
 }
-function closeOverlay() { const ov = $('#overlay'); ov.hidden = true; ov.innerHTML = ''; ov.className = 'overlay'; }
+function closeOverlay() { const ov = $('#overlay'); ov.hidden = true; ov.innerHTML = ''; ov.className = 'overlay'; D = null; }
+
+// ------------------------------------------------------------ drawing on a photo
+// Lines drawn with a finger to point something out. The untouched photo is kept beside the marked-up one,
+// and the lines themselves are kept too, so the drawing can be changed or removed later.
+let D = null;
+async function startDraw(photoId) {
+  const o = selected(); if (!o) return;
+  const p = (S.photos.get(o.id) || []).find(q => q.id === photoId); if (!p) return;
+  const img = await loadImage(p.original || p.blob);
+  const ov = $('#overlay');
+  ov.className = 'overlay photo draw'; ov.hidden = false;
+  ov.innerHTML = `<canvas id="draw"></canvas>
+    <div class="drawhint"${p.strokes && p.strokes.length ? ' hidden' : ''}>Draw with your finger</div>
+    <div class="tools"><button data-act="draw-cancel">Cancel</button><button data-act="draw-undo">Undo</button><button data-act="draw-clear">Clear</button><button class="primary" data-act="draw-save">Save</button></div>`;
+  const c = $('#draw'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+  D = { p, img, c, strokes: JSON.parse(JSON.stringify(p.strokes || [])), cur: null };
+  const at = e => { const r = c.getBoundingClientRect(); return [Math.round((e.clientX - r.left) * c.width / r.width), Math.round((e.clientY - r.top) * c.height / r.height)]; };
+  c.addEventListener('pointerdown', e => {
+    if (!D) return;
+    e.preventDefault(); c.setPointerCapture(e.pointerId);
+    D.cur = [at(e)]; D.strokes.push(D.cur); $('.drawhint').hidden = true; paintDraw();
+  });
+  c.addEventListener('pointermove', e => { if (D && D.cur) { e.preventDefault(); D.cur.push(at(e)); paintDraw(); } });
+  for (const type of ['pointerup', 'pointercancel']) c.addEventListener(type, () => { if (D) D.cur = null; });
+  paintDraw();
+}
+function paintDraw() {
+  const { c, img, strokes } = D, g = c.getContext('2d'), w = Math.max(c.width, c.height) * 0.008;
+  g.drawImage(img, 0, 0, c.width, c.height);
+  g.lineCap = g.lineJoin = 'round';
+  for (const [colour, width] of [['#fff', w * 1.7], ['#EC684A', w]]) {   // white edge so it shows on any photo
+    g.strokeStyle = g.fillStyle = colour; g.lineWidth = width;
+    for (const s of strokes) {
+      g.beginPath(); g.moveTo(s[0][0], s[0][1]);
+      if (s.length === 1) g.lineTo(s[0][0] + 0.1, s[0][1]);
+      for (const q of s.slice(1)) g.lineTo(q[0], q[1]);
+      g.stroke();
+    }
+  }
+}
+async function saveDraw(btn) {
+  if (!D) return;
+  const { p, c, strokes } = D;
+  btn.disabled = true;
+  if (strokes.length) {
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    if (!p.original) p.original = p.blob;
+    p.blob = blob; p.strokes = strokes;
+  } else if (p.original) {            // every line removed: back to the photo as taken
+    p.blob = p.original; delete p.original; delete p.strokes;
+  }
+  p.thumb = (await scaled(await loadImage(p.blob), 320, 0.7)).blob;
+  await idb.put('photos', p);
+  dropUrl('thumb:' + p.id); dropUrl('full:' + p.id); touch();
+  D = null; showPhoto(p.id); renderSheetPhotos(); renderStats();
+}
 
 // ------------------------------------------------------------ list of observations
 function showList() {
@@ -652,13 +728,14 @@ async function buildExport(by) {
     if (!ps.length && !o.note.trim()) continue;
     const plan = S.plans.find(p => p.id === o.planId);
     const files = ps.map((p, i) => `photos/${pad(o.seq, 3)}-${i + 1}.jpg`);
-    ps.forEach((p, i) => entries.push({ name: files[i], blob: p.blob }));
+    const originals = ps.map((p, i) => p.original ? `originals/${pad(o.seq, 3)}-${i + 1}.jpg` : null);   // as taken, before drawing on it
+    ps.forEach((p, i) => { entries.push({ name: files[i], blob: p.blob }); if (p.original) entries.push({ name: originals[i], blob: p.original }); });
     observations.push({
       id: o.id, seq: o.seq, planId: o.planId, planName: o.planName,
       x: o.x, y: o.y, model: toModel(plan, o.x, o.y),
       roomId: o.roomId, roomNumber: o.roomNumber, roomName: o.roomName,
       category: o.category, note: o.note.trim(), createdAt: o.createdAt,
-      photos: ps.map((p, i) => ({ file: files[i], takenAt: p.takenAt, width: p.w, height: p.h })),
+      photos: ps.map((p, i) => ({ file: files[i], takenAt: p.takenAt, width: p.w, height: p.h, ...(originals[i] ? { original: originals[i] } : {}) })),
     });
   }
   const exportedAt = new Date().toISOString();
@@ -756,7 +833,7 @@ document.addEventListener('click', async e => {
     if (d.project) return showProject(d.project);
     if (d.plan) { closeSheet(); return setPlan(d.plan); }
     if (d.obs) return openObs(d.obs);
-    if (d.goto) { renderVisit(S.obs.find(o => o.id === d.goto).planId); return openObs(d.goto); }
+    if (d.goto) { renderVisit(S.obs.find(o => o.id === d.goto).planId || (S.plan && S.plan.id)); return openObs(d.goto); }
     if (d.cat) {
       const o = selected(); if (!o) return;
       o.category = o.category === d.cat ? '' : d.cat; saveNote(); idb.put('observations', o); touch();
@@ -774,6 +851,12 @@ document.addEventListener('click', async e => {
       case 'plan': return renderVisit(S.plan && S.plan.id);
       case 'list': return showList();
       case 'fit': return S.view.fit();
+      case 'general': return addGeneral();
+      case 'draw': return startDraw(d.photo);
+      case 'draw-undo': if (D) { D.strokes.pop(); paintDraw(); } return;
+      case 'draw-clear': if (D) { D.strokes = []; paintDraw(); } return;
+      case 'draw-cancel': { const id = D && D.p.id; D = null; return id ? showPhoto(id) : closeOverlay(); }
+      case 'draw-save': return saveDraw(t);
       case 'done': return closeSheet();
       case 'camera': return $('#cam').click();
       case 'library': return $('#lib').click();

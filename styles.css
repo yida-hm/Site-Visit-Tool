@@ -180,6 +180,20 @@ h2 { font-size: 13px; font-weight: 500; color: var(--mute); margin: 20px 4px 8px
   position: absolute; right: 10px; bottom: 10px; width: 44px; height: 44px; border-radius: 50%;
   border: 1px solid var(--line); background: var(--card); color: var(--navy); font-size: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.2);
 }
+.genbtn {
+  position: absolute; left: 10px; bottom: 10px; height: 44px; padding: 0 16px 0 12px; border-radius: 22px;
+  display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600;
+  border: 1px solid var(--line); background: var(--card); color: var(--blue); box-shadow: 0 1px 4px rgba(0,0,0,.2);
+}
+.genbtn svg { width: 18px; height: 18px; }
+body.sheet-open .genbtn, body.sheet-open .fitbtn { bottom: 28px; }
+.sheet-head .where { flex: 1; min-width: 0; font-weight: 600; color: var(--navy); }
+.sheet-head .where small { display: block; font-weight: 400; font-size: 13px; color: var(--mute); }
+/* drawing on a photo */
+.overlay.photo.draw { align-content: center; }
+.overlay.photo.draw canvas { max-width: 100vw; max-height: calc(100vh - 84px - var(--safe-b)); touch-action: none; margin-bottom: calc(70px + var(--safe-b)); }
+.overlay.photo.draw .drawhint { position: absolute; top: 16px; left: 50%; translate: -50% 0; pointer-events: none; background: rgba(0,0,0,.55); color: #fff; padding: 6px 14px; border-radius: 16px; font-size: 14px; }
+.overlay.photo .tools button.primary { background: var(--blue); font-weight: 600; }
 
 /* ---- observation panel: part of the page layout (below the plan), not floating over it ---- */
 .sheet {
