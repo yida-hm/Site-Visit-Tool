@@ -408,7 +408,7 @@ class PlanView {
     this.apply();
   }
   down(e) {
-    if (e.target.closest('.pin, .fitbtn')) return;
+    if (e.target.closest('.pin, .fitbtn, .genbtn')) return;    // buttons over the plan take their own taps
     this.vp.setPointerCapture(e.pointerId);
     this.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this.pts.size === 1) this.gesture = { x0: e.clientX, y0: e.clientY, t0: Date.now(), moved: false, pinched: false };
