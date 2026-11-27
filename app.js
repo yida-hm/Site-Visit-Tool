@@ -99,7 +99,14 @@ async function importPack(pack) {
     dropUrl('plan:' + pid + '|' + p.id);
     plans.push({ id: p.id, name: p.name });
   }
-  await idb.put('projects', Object.assign({}, pack.project, { plans, importedAt: new Date().toISOString() }));
+  // Items from earlier visits that are still open: sent by Revit so they can be checked and closed on site.
+  const open = pack.openItems || {};
+  await idb.put('projects', Object.assign({}, pack.project, {
+    plans, importedAt: new Date().toISOString(),
+    openItems: Array.isArray(open.items) ? open.items : [], itemsUpdatedAt: open.updatedAt || pack.project.publishedAt || null,
+    // The project's Site Inspection List: building elements an item can be tagged as inspecting.
+    inspection: Array.isArray(open.inspection) ? open.inspection : [],
+  }));
   return pid;
 }
 
@@ -136,7 +143,19 @@ async function demoPack() {
       rooms: rooms.map(([num, rname, x, y, w, h]) => ({ id: 'demo-' + lvl + '-' + num, number: lvl + '.' + num, name: rname, polygon: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]] })),
     });
   }
-  return { format: 'hm-sitepack', version: 1, project: { id: 'demo', number: '0000', name: 'Demo Building' }, plans };
+  const inspection = [
+    ['Sub-structure', 'Damp proof membrane'], ['Sub-structure', 'Underslab insulation installation.'],
+    ['External Envelope - Walls', 'Cavity barrier installation.'], ['External Envelope - Walls', 'Cill overhangs'],
+    ['Internal Fit-out', 'Firestopping'], ['Internal Fit-out', 'Heights and gaps to any balustrades / guarding.'],
+  ].map(([group, text], i) => ({ id: 'demo-row-' + (i + 1), group, text }));
+  const openItems = { updatedAt: new Date().toISOString(), inspection, items: [
+    { id: 'demo-item-1', number: 1, raised: '2026-11-04', type: 'Defect', planId: 'demo-0', x: 1100, y: 900,
+      title: 'Wall tiles chipped behind sink', note: 'Three tiles chipped at the splashback.', location: '0.08 Kitchen, Ground Floor',
+      action: 'Contractor to replace tiles.', updates: [] },
+    { id: 'demo-item-2', number: 2, raised: '2026-11-04', type: 'Query', planId: 'demo-1', x: 450, y: 950,
+      title: 'Socket heights', note: 'Sockets look lower than drawn. Check against the room layout.', location: '1.06 Library, First Floor',
+      action: '', updates: [{ date: '2026-11-18', note: 'Still to be checked.' }] }] };
+  return { format: 'hm-sitepack', version: 1, project: { id: 'demo', number: '0000', name: 'Demo Building' }, plans, openItems };
 }
 
 // ------------------------------------------------------------ what still has to be sent
@@ -223,6 +242,7 @@ async function showProject(pid) {
         <button class="plain" data-act="add">Update plans from OneDrive<span class="chev">&rsaquo;</span></button>
         <button class="plain danger" data-act="remove-project">Remove project from this phone</button>
       </div>
+      ${project.id === 'demo' ? '' : `<p class="muted">Plans and open items last updated from OneDrive on ${fmtDate(project.importedAt)}${(project.openItems || []).length ? ` &middot; ${plural(project.openItems.length, 'open item')}` : ''}. Update before each visit so items closed at the desk drop off.</p>`}
     </div>`;
 }
 
@@ -240,7 +260,10 @@ async function openVisit(visitId, planId) {
   S.project = await idb.get('projects', visit.projectId);
   const all = await idb.by('plans', 'project', visit.projectId);
   S.plans = S.project.plans.map(m => all.find(p => p.id === m.id)).filter(Boolean);
-  S.obs = (await idb.by('observations', 'visit', visitId)).sort((a, b) => a.seq - b.seq);
+  const records = await idb.by('observations', 'visit', visitId);
+  S.obs = records.filter(o => o.kind !== 'update').sort((a, b) => a.seq - b.seq);
+  S.updates = records.filter(o => o.kind === 'update');      // what was added to older, still-open items on this visit
+  S.items = S.project.openItems || [];
   S.photos = new Map();
   for (const p of (await idb.by('photos', 'visit', visitId)).sort((a, b) => a.takenAt.localeCompare(b.takenAt))) {
     if (!S.photos.has(p.observationId)) S.photos.set(p.observationId, []);
@@ -296,10 +319,14 @@ function renderRooms() {
 
 function renderPins() {
   if (!$('#pins')) return;
-  $('#pins').innerHTML = S.obs.filter(o => S.plan && o.planId === S.plan.id).map(o =>
+  const older = S.items.filter(it => S.plan && it.planId === S.plan.id).map(it => {
+    const u = updateFor(it.id), state = u && hasContent(u) ? (u.closed ? ' closed' : ' seen') : '';
+    return `<button class="pin old${state}${u && u.id === S.sel ? ' sel' : ''}" data-item="${esc(it.id)}"><span>${u && u.closed ? '&#10003;' : esc(it.number)}</span></button>`;
+  }).join('');
+  $('#pins').innerHTML = older + S.obs.filter(o => S.plan && o.planId === S.plan.id).map(o =>
     `<button class="pin${o.id === S.sel ? ' sel' : ''}${(S.photos.get(o.id) || []).length ? '' : ' empty'}" data-obs="${esc(o.id)}"><span>${o.seq}</span></button>`).join('');
   positionPins();
-  $('#hint').hidden = S.obs.length > 0;
+  $('#hint').hidden = S.obs.length > 0 || S.items.length > 0;
   const general = S.obs.filter(o => !o.planId).length;
   $('#gen-label').textContent = general ? `General note (${general})` : 'General note';
 }
@@ -322,7 +349,7 @@ function addGeneral() {
 function positionPins() {
   if (!S.view || !S.plan || !$('#pins')) return;
   for (const el of $('#pins').children) {
-    const o = S.obs.find(x => x.id === el.dataset.obs);
+    const o = el.dataset.item ? S.items.find(x => x.id === el.dataset.item) : S.obs.find(x => x.id === el.dataset.obs);
     if (!o) continue;
     const [sx, sy] = S.view.toScreen(o.x, o.y);
     el.style.left = sx + 'px'; el.style.top = sy + 'px';
@@ -459,7 +486,28 @@ function onPlanTap(x, y, viaTouch) {
   renderPins(); renderLevels(); renderSheet(); revealPin(o);
 }
 
-function selected() { return S.obs.find(o => o.id === S.sel) || null; }
+// A new location or an update to an older item: both are edited in the same panel.
+const record = id => S.obs.find(o => o.id === id) || (S.updates || []).find(u => u.id === id) || null;
+function selected() { return S.sel ? record(S.sel) : null; }
+const updateFor = itemId => (S.updates || []).find(u => u.itemId === itemId) || null;
+const hasContent = o => (S.photos.get(o.id) || []).length > 0 || !!o.note.trim() || !!o.closed;
+
+// An item from an earlier visit that is still open. Tapping it starts (or reopens) this visit's update to it.
+function openItem(itemId) {
+  const it = S.items.find(x => x.id === itemId);
+  if (!it) return;
+  closeSheet();
+  if (it.planId && (!S.plan || S.plan.id !== it.planId)) setPlan(it.planId);
+  let u = updateFor(itemId);
+  if (!u) {
+    u = {
+      id: uid(), kind: 'update', visitId: S.visit.id, projectId: S.project.id, itemId, itemNumber: it.number,
+      seq: 0, planId: it.planId || null, x: it.x, y: it.y, closed: false, note: '', category: '', createdAt: new Date().toISOString(),
+    };
+    S.updates.push(u); idb.put('observations', u);
+  }
+  S.sel = u.id; renderPins(); renderSheet(); revealPin(u);
+}
 
 function openObs(id) {
   if (S.sel && S.sel !== id) closeSheet();
@@ -472,6 +520,7 @@ function openObs(id) {
 function renderSheet() {
   const o = selected(), sheet = $('#sheet');
   if (!o) return hideSheet();
+  if (o.kind === 'update') return renderUpdateSheet(o, sheet);
   const plan = S.plans.find(p => p.id === o.planId);
   const keepNote = sheet.dataset.obs === o.id && $('textarea', sheet) ? $('textarea', sheet).value : o.note;
   sheet.dataset.obs = o.id;
@@ -488,10 +537,52 @@ function renderSheet() {
     </div>
     <div class="photos">${photosHtml(o)}</div>
     <textarea id="note" rows="3" placeholder="What did you see? Tap the microphone on the keyboard to dictate.">${esc(keepNote)}</textarea>
+    ${elementPicker(o)}
     <div class="chips">
       ${CATEGORIES.map(c => `<button data-cat="${esc(c)}" class="${o.category === c ? 'on' : ''}">${esc(c)}</button>`).join('')}
       <span class="spacer"></span>
       <button class="danger" data-act="delete-obs">Delete</button>
+    </div>`;
+  sheet.hidden = false;
+  document.body.classList.add('sheet-open');
+}
+
+// Optional: the row of the project's Site Inspection List that this item inspects.
+function elementPicker(o) {
+  const rows = (S.project && S.project.inspection) || [];
+  if (!rows.length) return '';
+  const groups = [...new Set(rows.map(r => r.group))];
+  return `<select id="element" class="element${o.element ? ' on' : ''}">
+      <option value="">Inspection list: not an inspection</option>
+      ${groups.map(g => `<optgroup label="${esc(g)}">${rows.filter(r => r.group === g).map(r =>
+        `<option value="${esc(r.id)}"${r.id === o.element ? ' selected' : ''}>${esc(r.text)}</option>`).join('')}</optgroup>`).join('')}
+    </select>`;
+}
+
+function renderUpdateSheet(u, sheet) {
+  const it = S.items.find(x => x.id === u.itemId) || { number: u.itemNumber, title: '', note: '', updates: [] };
+  const keepNote = sheet.dataset.obs === u.id && $('textarea', sheet) ? $('textarea', sheet).value : u.note;
+  sheet.dataset.obs = u.id;
+  sheet.innerHTML = `
+    <div class="sheet-head">
+      <span class="num old">${esc(it.number)}</span>
+      <span class="where">Open item <small>raised ${it.raised ? fmtDate(it.raised) : 'on an earlier visit'}${it.type ? ' &middot; ' + esc(it.type) : ''}</small></span>
+      <button data-act="done">Done</button>
+    </div>
+    <div class="earlier">
+      ${it.thumb ? `<img src="data:image/jpeg;base64,${it.thumb}" alt="">` : ''}
+      <div><b>${esc(it.title || (it.note || 'Item ' + it.number).split('\n')[0])}</b>
+        ${it.title && it.note ? `<p>${esc(it.note)}</p>` : ''}
+        ${it.location ? `<small>${esc(it.location)}</small>` : ''}
+        ${it.action ? `<p><i>Action:</i> ${esc(it.action)}</p>` : ''}
+        ${(it.updates || []).map(p => `<p><i>${fmtDate(p.date)}:</i> ${esc(p.note || 'photo added')}</p>`).join('')}</div>
+    </div>
+    <div class="photos">${photosHtml(u)}</div>
+    <textarea id="note" rows="2" placeholder="What is it like today?">${esc(keepNote)}</textarea>
+    <div class="chips">
+      <button data-act="toggle-closed" class="closer${u.closed ? ' on' : ''}">${u.closed ? '&#10003; Closed on this visit' : 'Mark as closed'}</button>
+      <span class="spacer"></span>
+      <button class="danger" data-act="delete-obs">Clear</button>
     </div>`;
   sheet.hidden = false;
   document.body.classList.add('sheet-open');
@@ -529,6 +620,14 @@ function saveNote() {
 }
 
 async function deleteObs(id) {
+  const k = (S.updates || []).findIndex(u => u.id === id);
+  if (k >= 0) {                       // an update to an older item: the item itself stays, only this visit's addition goes
+    for (const p of S.photos.get(id) || []) { await idb.del('photos', p.id); dropUrl('thumb:' + p.id); dropUrl('full:' + p.id); }
+    S.photos.delete(id);
+    await idb.del('observations', id);
+    S.updates.splice(k, 1); touch();
+    return;
+  }
   const i = S.obs.findIndex(o => o.id === id);
   if (i < 0) return;
   for (const p of S.photos.get(id) || []) { await idb.del('photos', p.id); dropUrl('thumb:' + p.id); dropUrl('full:' + p.id); }
@@ -546,7 +645,7 @@ function closeSheet(silent) {
   if (o) {
     saveNote();
     S.sel = null;
-    if (!S.busy && !(S.photos.get(o.id) || []).length && !o.note.trim()) deleteObs(o.id).then(() => { if (S.visit && !silent) { renderPins(); renderLevels(); } });
+    if (!S.busy && !hasContent(o)) deleteObs(o.id).then(() => { if (S.visit && !silent) { renderPins(); renderLevels(); } });
   }
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   hideSheet();
@@ -570,7 +669,7 @@ function scaled(img, max, quality) {
 }
 
 async function addPhotos(obsId, files) {
-  const o = S.obs.find(q => q.id === obsId);
+  const o = record(obsId);
   if (!o || !files.length) return;
   S.busy += files.length; if (S.sel === obsId) renderSheetPhotos();
   for (const f of files) {
@@ -679,6 +778,16 @@ function showList() {
           ${o.note ? `<div class="muted">${esc(o.note.length > 90 ? o.note.slice(0, 90) + '…' : o.note)}</div>` : ''}</div>
         </button>`;
       }).join('')}
+      ${S.items.length ? `<h2>Open items from earlier visits</h2>` : ''}
+      ${S.items.map(it => {
+        const u = updateFor(it.id), ph = u ? (S.photos.get(u.id) || []) : [];
+        return `<button class="card" data-item="${esc(it.id)}">
+          <span class="seq old">${esc(it.number)}</span>
+          ${ph.length ? `<img class="thumb" src="${urlFor('thumb:' + ph[0].id, ph[0].thumb)}" alt="">` : it.thumb ? `<img class="thumb" src="data:image/jpeg;base64,${it.thumb}" alt="">` : ''}
+          <div class="grow"><b>${esc(it.title || (it.note || 'Item ' + it.number).split('\n')[0])}${u && hasContent(u) ? `<span class="tag${u.closed ? '' : ' warn'}">${u.closed ? 'closed today' : 'updated today'}</span>` : ''}</b>
+          <small>${esc(it.location || '')}${it.raised ? ' &middot; raised ' + fmtDate(it.raised) : ''}</small></div>
+        </button>`;
+      }).join('')}
     </div>`;
 }
 
@@ -734,8 +843,19 @@ async function buildExport(by) {
       id: o.id, seq: o.seq, planId: o.planId, planName: o.planName,
       x: o.x, y: o.y, model: toModel(plan, o.x, o.y),
       roomId: o.roomId, roomNumber: o.roomNumber, roomName: o.roomName,
-      category: o.category, note: o.note.trim(), createdAt: o.createdAt,
+      category: o.category, note: o.note.trim(), createdAt: o.createdAt, element: o.element || '',
       photos: ps.map((p, i) => ({ file: files[i], takenAt: p.takenAt, width: p.w, height: p.h, ...(originals[i] ? { original: originals[i] } : {}) })),
+    });
+  }
+  // What this visit added to items from earlier visits: photos, a note, and whether it was closed.
+  const updates = [];
+  for (const u of S.updates.filter(hasContent)) {
+    const ps = S.photos.get(u.id) || [];
+    const files = ps.map((p, i) => `photos/u${pad(u.itemNumber, 3)}-${i + 1}.jpg`);
+    ps.forEach((p, i) => entries.push({ name: files[i], blob: p.blob }));
+    updates.push({
+      id: u.id, itemId: u.itemId, itemNumber: u.itemNumber, closed: !!u.closed, note: u.note.trim(), createdAt: u.createdAt,
+      photos: ps.map((p, i) => ({ file: files[i], takenAt: p.takenAt, width: p.w, height: p.h })),
     });
   }
   const exportedAt = new Date().toISOString();
@@ -743,13 +863,13 @@ async function buildExport(by) {
     format: 'hm-sitevisit', version: 1,
     project: { id: S.project.id, number: S.project.number || '', name: S.project.name },
     visit: { id: S.visit.id, date: S.visit.date, startedAt: S.visit.startedAt, exportedAt, by },
-    observations,
+    observations, updates,
   };
   entries.unshift({ name: 'visit.json', blob: new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }) });
   const zip = await makeZip(entries);
   const stamp = S.visit.date + ' ' + pad(new Date(S.visit.startedAt).getHours()) + pad(new Date(S.visit.startedAt).getMinutes());
   const name = `${(S.project.number || S.project.name).replace(/[\\/:*?"<>|]/g, '-')} Site Visit ${stamp}.zip`;
-  return { file: new File([zip], name, { type: 'application/zip' }), count: observations.length, exportedAt };
+  return { file: new File([zip], name, { type: 'application/zip' }), count: observations.length + updates.length, exportedAt };
 }
 
 let pendingExport = null;
@@ -758,15 +878,18 @@ function showFinish() {
   const nObs = S.obs.filter(o => (S.photos.get(o.id) || []).length || o.note.trim()).length;
   const nPhotos = [...S.photos.values()].reduce((s, a) => s + a.length, 0);
   const total = totalRooms();
+  const done = S.updates.filter(hasContent), nClosed = done.filter(u => u.closed).length;
+  const stillOpen = S.items.length - done.length;
   const ov = $('#overlay'); ov.className = 'overlay'; ov.hidden = false; pendingExport = null;
   ov.innerHTML = `<div class="dialog">
     <h3>Finish &amp; send</h3>
     <p>${nObs} location${nObs === 1 ? '' : 's'}, ${nPhotos} photo${nPhotos === 1 ? '' : 's'}${total ? `, ${coveredRoomIds().size} of ${total} rooms covered` : ''}.</p>
+    ${S.items.length ? `<p>Open items from earlier visits: ${done.length} looked at${nClosed ? ` (${nClosed} closed)` : ''}${stillOpen > 0 ? `, <span class="warn">${stillOpen} not looked at</span>` : ''}.</p>` : ''}
     <label class="muted" for="by">Your name</label>
     <input id="by" type="text" value="${esc(localStorage.getItem('sv.name') || '')}" autocomplete="name">
     <p class="muted" id="finish-msg">The visit is packed into one file. Save it to the project's <i>Site Visits</i> folder in OneDrive.</p>
     <div class="row"><button data-act="close-overlay">Not yet</button>
-      <button class="primary" data-act="prepare" ${nObs ? '' : 'disabled'}>Prepare file</button></div>
+      <button class="primary" data-act="prepare" ${nObs || done.length ? '' : 'disabled'}>Prepare file</button></div>
     ${nPhotos ? `<div class="extra">
       <button class="link" data-act="save-photos">Keep a copy of the photos on this phone</button>
       <p class="muted" id="photos-msg">${S.visit.photosSavedAt ? 'A copy was saved to this phone on ' + fmtDate(S.visit.photosSavedAt.slice(0, 10)) + '.' : 'A spare copy in case the visit file goes astray. Choose <i>Save Images</i> in the list that opens.'}</p>
@@ -826,10 +949,14 @@ const isTextField = el => el && el.matches && el.matches('textarea, input[type=t
 document.addEventListener('click', async e => {
   // Belt and braces for iPhones: a tap on a text box always gives it the keyboard.
   if (isTextField(e.target)) { if (document.activeElement !== e.target) e.target.focus(); return; }
-  const t = e.target.closest('[data-act],[data-project],[data-plan],[data-obs],[data-cat],[data-photo],[data-goto]');
+  const t = e.target.closest('[data-act],[data-project],[data-plan],[data-obs],[data-item],[data-cat],[data-photo],[data-goto]');
   if (!t) return;
   const d = t.dataset;
   try {
+    if (d.item) {
+      if (!$('#pins')) { const it = S.items.find(x => x.id === d.item); renderVisit((it && it.planId) || (S.plan && S.plan.id)); }
+      return openItem(d.item);
+    }
     if (d.project) return showProject(d.project);
     if (d.plan) { closeSheet(); return setPlan(d.plan); }
     if (d.obs) return openObs(d.obs);
@@ -852,6 +979,11 @@ document.addEventListener('click', async e => {
       case 'list': return showList();
       case 'fit': return S.view.fit();
       case 'general': return addGeneral();
+      case 'toggle-closed': {
+        const u = selected(); if (!u || u.kind !== 'update') return;
+        saveNote(); u.closed = !u.closed; idb.put('observations', u); touch();
+        renderSheet(); renderPins(); return;
+      }
       case 'draw': return startDraw(d.photo);
       case 'draw-undo': if (D) { D.strokes.pop(); paintDraw(); } return;
       case 'draw-clear': if (D) { D.strokes = []; paintDraw(); } return;
@@ -863,7 +995,8 @@ document.addEventListener('click', async e => {
       case 'delete-obs': {
         const o = selected(); if (!o) return;
         const n = (S.photos.get(o.id) || []).length;
-        if (n && !confirm(`Delete location ${o.seq} and its ${n} photo${n === 1 ? '' : 's'}?`)) return;
+        if (n && !confirm(o.kind === 'update' ? `Clear what you added to item ${o.itemNumber} today, with its ${plural(n, 'photo')}?`
+          : `Delete location ${o.seq} and its ${n} photo${n === 1 ? '' : 's'}?`)) return;
         S.sel = null; hideSheet();
         await deleteObs(o.id); renderPins(); renderLevels(); renderRooms(); renderStats(); return;
       }
@@ -903,6 +1036,11 @@ document.addEventListener('focusout', e => {
   if (isTextField(e.target)) setTimeout(() => { if (!isTextField(document.activeElement)) window.scrollTo(0, 0); }, 80);
 });
 document.addEventListener('change', e => {
+  if (e.target.id === 'element') {
+    const o = selected(); if (!o) return;
+    o.element = e.target.value || ''; e.target.classList.toggle('on', !!o.element);
+    idb.put('observations', o); touch(); return;
+  }
   if (e.target.id !== 'room') return;
   const o = selected(); if (!o) return;
   const plan = S.plans.find(p => p.id === o.planId), r = plan && plan.rooms.find(q => q.id === e.target.value);

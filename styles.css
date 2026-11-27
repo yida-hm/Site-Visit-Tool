@@ -172,6 +172,21 @@ h2 { font-size: 13px; font-weight: 500; color: var(--mute); margin: 20px 4px 8px
 .pin span { display: block; rotate: 45deg; font-weight: 600; font-size: 13px; }
 .pin.sel { background: var(--navy); border-color: var(--sky); z-index: 2; }
 .pin.empty { background: var(--mute); }
+/* items from earlier visits that are still open: white with an orange edge until looked at */
+.pin.old { background: #fff; color: #B4502F; border-color: #EC684A; }
+.pin.old.seen { background: #EC684A; color: #fff; border-color: #fff; }
+.pin.old.closed { background: #3E8E5A; color: #fff; border-color: #fff; }
+.pin.old.sel { border-color: var(--navy); z-index: 2; }
+.num.old, .card .seq.old { background: #fff; color: #B4502F; border: 2px solid #EC684A; }
+.earlier { display: flex; gap: 10px; background: #FFF6F3; border: 1px solid #F3C6BA; border-radius: 12px; padding: 10px; margin-bottom: 10px; max-height: 132px; overflow-y: auto; }
+.earlier img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; flex: none; }
+.earlier b { display: block; font-size: 14px; font-weight: 600; }
+.earlier p { margin: 3px 0 0; font-size: 13px; }
+.earlier small { color: var(--mute); font-size: 12px; }
+.sheet select.element { width: 100%; min-height: 40px; margin: 0 0 10px; border: 1px solid var(--hair); border-radius: 10px; background: var(--bg); padding: 0 8px; font-size: 14px; color: var(--mute); }
+.sheet select.element.on { border-color: var(--blue); color: var(--navy); background: var(--tint); font-weight: 600; }
+.chips button.closer { border-color: #3E8E5A; color: #2F6E45; font-weight: 600; }
+.chips button.closer.on { background: #3E8E5A; color: #fff; }
 .hint {
   position: absolute; left: 50%; top: 12px; translate: -50% 0; pointer-events: none;
   background: rgba(29,60,94,.9); color: #fff; padding: 6px 14px; border-radius: 16px; font-size: 14px; white-space: nowrap;
